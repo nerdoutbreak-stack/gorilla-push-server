@@ -9,7 +9,7 @@ const express = require('express');
 const cors = require('cors');
 const webpush = require('web-push');
 const db = require('./db');
-const { selectDueForNotification, buildNotificationPayload } = require('./lib/notifyLogic');
+const { selectDueForNotification, buildNotificationPayload, shouldMarkNotified } = require('./lib/notifyLogic');
 
 const PORT = process.env.PORT || 3000;
 const CHECK_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
@@ -49,6 +49,27 @@ app.post('/subscribe', async (req, res) => {
   }
 });
 
+/**
+ * Safe, targeted removal — deletes only the one matching endpoint, never
+ * a bulk wipe. Used by the client's reset flow before creating a fresh
+ * subscription, so a stale endpoint from an old VAPID keypair (or a
+ * reinstalled PWA) doesn't linger in the table. Best-effort from the
+ * client's point of view: a missing/unknown endpoint is not an error.
+ */
+app.post('/unsubscribe', async (req, res) => {
+  const endpoint = req.body?.endpoint;
+  if (!endpoint || typeof endpoint !== 'string') {
+    return res.status(400).json({ error: 'endpoint is required.' });
+  }
+  try {
+    await db.removeSubscriptionByEndpoint(endpoint);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('unsubscribe error', err);
+    res.status(500).json({ error: 'Could not remove subscription.' });
+  }
+});
+
 app.post('/sync-followups', async (req, res) => {
   const followups = Array.isArray(req.body?.followups) ? req.body.followups : null;
   if (!followups) return res.status(400).json({ error: 'followups array required.' });
@@ -75,28 +96,26 @@ async function runNotificationCheck() {
 
     for (const followup of due) {
       const payload = JSON.stringify(buildNotificationPayload(followup));
-      let deliveredToAny = subscriptions.length === 0 ? false : null;
+      let anyDelivered = false;
 
       for (const sub of subscriptions) {
         const pushSubscription = {
           endpoint: sub.endpoint,
           keys: { p256dh: sub.p256dh, auth: sub.auth },
         };
-       try {
+        try {
           await webpush.sendNotification(pushSubscription, payload);
-          deliveredToAny = true;
+          anyDelivered = true;
         } catch (err) {
-          console.error('push send error', err.statusCode, err.body || err.message);
           if (err.statusCode === 404 || err.statusCode === 410) {
             await db.removeSubscriptionByEndpoint(sub.endpoint);
+          } else {
+            console.error('push send error', err.statusCode, err.body || err.message);
           }
         }
       }
 
-      // Only mark notified if there was at least one subscription to try —
-      // otherwise a follow-up that came due before anyone ever enabled
-      // notifications would silently never get pushed once they do.
-      if (deliveredToAny === true) {
+      if (shouldMarkNotified(subscriptions.length, anyDelivered)) {
         await db.markNotified(followup.id);
       }
     }
@@ -115,3 +134,4 @@ db.initSchema()
     console.error('Failed to initialize database schema:', err);
     process.exit(1);
   });
+
