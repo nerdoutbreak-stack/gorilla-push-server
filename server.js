@@ -82,14 +82,13 @@ async function runNotificationCheck() {
           endpoint: sub.endpoint,
           keys: { p256dh: sub.p256dh, auth: sub.auth },
         };
-        try {
+       try {
           await webpush.sendNotification(pushSubscription, payload);
           deliveredToAny = true;
         } catch (err) {
+          console.error('push send error', err.statusCode, err.body || err.message);
           if (err.statusCode === 404 || err.statusCode === 410) {
             await db.removeSubscriptionByEndpoint(sub.endpoint);
-          } else {
-            console.error('push send error', err.message);
           }
         }
       }
