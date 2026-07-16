@@ -96,7 +96,7 @@ async function runNotificationCheck() {
       // Only mark notified if there was at least one subscription to try —
       // otherwise a follow-up that came due before anyone ever enabled
       // notifications would silently never get pushed once they do.
-      if (deliveredToAny !== false) {
+      if (deliveredToAny === true) {
         await db.markNotified(followup.id);
       }
     }
