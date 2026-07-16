@@ -36,7 +36,9 @@ async function upsertSubscription(sub) {
   await pool.query(
     `INSERT INTO subscriptions (endpoint, p256dh, auth)
      VALUES ($1, $2, $3)
-     ON CONFLICT (endpoint) DO NOTHING`,
+     ON CONFLICT (endpoint) DO UPDATE SET
+       p256dh = EXCLUDED.p256dh,
+       auth = EXCLUDED.auth`,
     [sub.endpoint, sub.keys.p256dh, sub.keys.auth]
   );
 }
